@@ -1,0 +1,9 @@
+idf_component_register(
+	SRCS 
+		"main.c"
+		"pms7003.c"
+		"bme280.c"
+		"lcd.c"
+	INCLUDE_DIRS
+		"."
+)
