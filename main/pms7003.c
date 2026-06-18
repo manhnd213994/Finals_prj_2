@@ -4,8 +4,9 @@
 #include "pms7003.h"
 
 uint16_t read_pm25 (uart_port_t uar_num){
-	uint8_t buf[SIZE];
+	uint8_t buf[PACKET_SIZE];
     uint8_t *read = buf; //địa chỉ thanh ghi đang đọc
+	const uart_port_t uart_num = PMS_UART_PORT ; 
 	while (1) {
 
 		int len = uart_read_bytes(uart_num, read, 1, pdMS_TO_TICKS(TIMEOUT_MS));
