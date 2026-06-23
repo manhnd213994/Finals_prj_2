@@ -46,31 +46,46 @@ if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
 	TODO: Thử theo cách này
 */
 // fetch data (Gemini hd)
+static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        printf("[WIFI] Mat ket noi, dang thu ket noi lai...\n");
+        esp_wifi_connect(); 
+        xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+    } 
+    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+        printf("[WIFI] Da nhan duoc IP chuẩn: " IPSTR "\n", IP2STR(&event->ip_info.ip));
+        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+    }
+}
+
 void firebase_patch_data(double temp, double hum, uint16_t pm25) {
 	printf("bat dau firebase_patch_data \n");
     char json_payload[128];
-    // 1. Đóng gói dữ liệu thành chuỗi định dạng JSON chuẩn
     snprintf(json_payload, sizeof(json_payload), 
              "{\"temperature\": %.2f, \"humidity\": %.1f, \"pm25\": %03u}", 
              temp, hum, pm25);
 
-	const char *url = "embedded-finals-768a33-default-rtdb.asia-southeast1.firebasedatabase.app/.json?auth=ouFLCkulKxVRGfxxyDOzQk6LPar7BN1SsH5XGmx";
-    // Cấu hình HTTP Client
+	const char *url = "https://embedded-finals-768a33-default-rtdb.asia-southeast1.firebasedatabase.app/sensor_data.json?auth=ouFLCkulKxVRGfxxyDOzQk6LPar7BN1SsH5XGmx";
+    
+    // Cấu hình HTTP Client siêu tối giản (Tránh rác config)
     esp_http_client_config_t config_client = {
         .url = url,
-        .method = HTTP_METHOD_PATCH, // Dùng lệnh PATCH để cập nhật dữ liệu
-        .timeout_ms = 5000,          // Quá 5 giây không phản hồi thì ngắt chống treo chip
+        .method = HTTP_METHOD_PATCH, 
+        .timeout_ms = 5000,          
 		.transport_type = HTTP_TRANSPORT_OVER_SSL,
 		.skip_cert_common_name_check = true,
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&config_client);
+    if (client == NULL) {
+        printf("Firebase: Khoi tao client that bai\n");
+        return;
+    }
 
-    // 4. Cấu hình Header bắt buộc để Firebase hiểu đây là dữ liệu JSON
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_http_client_set_post_field(client, json_payload, strlen(json_payload));
 
-    // 5. Thực hiện gửi dữ liệu (Bắn lệnh HTTP)
     esp_err_t err = esp_http_client_perform(client);
 
     if (err == ESP_OK) {
@@ -80,10 +95,8 @@ void firebase_patch_data(double temp, double hum, uint16_t pm25) {
         printf("Firebase: Gui that bai! Loi = %s\n", esp_err_to_name(err));
     }
 
-    // 6. Luôn luôn giải phóng bộ nhớ sau khi dùng xong để tránh tràn RAM
     esp_http_client_cleanup(client);
 }
-
 void app_main(void) {
 	printf("chip reseted!");
 	// config cho đường bus i2c
@@ -137,32 +150,32 @@ void app_main(void) {
 	
 	//khởi tạo
 	
-	// WiFi (code mẫu)
-	// 1. Khởi tạo phân vùng lưu trữ Flash để lưu cấu hình hệ thống
+	// KHỞI TẠO MẠNG (Gemini)
 	nvs_flash_init();
-	// 2. Khởi tạo tầng mạng mạng Netif
 	esp_netif_init();
-	// 3. Tạo một vòng lặp sự kiện mặc định (Default Event Loop) để bắt các sự kiện Kết nối/Mất mạng
 	esp_event_loop_create_default();
 	esp_netif_create_default_wifi_sta();
-	// 4. Khởi tạo cấu hình Wi-Fi với các thiết lập mặc định từ phần cứng
+	
+	// ĐĂNG KÝ HÀM XỬ LÝ SỰ KIỆN WIFI VÀO HỆ THỐNG
+	esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL, NULL);
+	esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL, NULL);
+
 	wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
 	esp_wifi_init(&cfg);
-	// 5. Cấu hình SSID và Password bằng Struct trong C
+	
 	wifi_config_t wifi_config = {
 		.sta = {
 			.ssid = WIFI_SSID,
 			.password = WIFI_PASSWORD,
 		},
 	};
-	// 6. Đặt chế độ và Kích hoạt Wi-Fi
 	esp_wifi_set_mode(WIFI_MODE_STA);
 	esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
 	esp_wifi_start();
-	// 7. Ra lệnh kết nối
-	esp_wifi_connect();	
+	esp_wifi_connect();
 	// event group: để theo dõi trạng thái kết nối wifi
 	s_wifi_event_group = xEventGroupCreate();
+	
 	// lcd
 	lcd_init(lcd_handle);
 	vTaskDelay(pdMS_TO_TICKS(100));
@@ -227,7 +240,7 @@ void app_main(void) {
                                        pdFALSE, 
                                        pdTRUE, 
                                        pdMS_TO_TICKS(5000));
-		if ((bits & WIFI_CONNECTED_BIT) == 0) {
+		if ((bits & WIFI_CONNECTED_BIT) != 0) {
 
 		printf("\n connect successfully");	
 		firebase_patch_data(temp, hum, pm25);
