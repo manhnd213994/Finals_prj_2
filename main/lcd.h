@@ -10,7 +10,7 @@
 #include "esp_lcd_io_i2c.h"
 // cấu hình phần cứng
 //địa chỉ của module i2c
-#define LCD_ADDR       0x4D     // Từ 0x40 -> 0x4D (0 1 0 0 A2 A1 A0 0); bit cuối luôn là 0 do chỉ ghi 
+#define LCD_ADDR       0x27     
 //địa chỉ bộ nhớ DRAM của LCD
 #define LCD_LINE_1              0x80   
 #define LCD_LINE_2              0xC0
@@ -21,13 +21,15 @@
 #define PIN_EN                  (1 << 2)
 #define BACKLIGHT               (1 << 3)
 
+void lcd_send(i2c_master_dev_handle_t dev_handle, uint8_t value, uint8_t mode);
+
+void lcd_send_cmd(i2c_master_dev_handle_t dev_handle, uint8_t cmd);
+
+void lcd_send_data(i2c_master_dev_handle_t dev_handle, uint8_t data);
 
 esp_err_t lcd_init(i2c_master_dev_handle_t dev_handle);
 
-// Chọn vị trí con trỏ trên LCD, col là cột (0,15), row là hàng (0,1)
-void lcd_gotoxy(i2c_master_dev_handle_t dev_handle, uint8_t col, uint8_t row);
+void lcd_put_str(i2c_master_dev_handle_t dev_handle,uint8_t col, uint8_t row, const char *str);
 
-// In ra một chuỗi ký tự tính từ vị trí của con trỏ
-void lcd_put_str(i2c_master_dev_handle_t dev_handle, const char *str);
 
 #endif //LCD_H

@@ -7,7 +7,7 @@
 #include "esp_err.h"
 
 // Cấu hình phần cứng mặc định cho PMS7003
-#define PMS_UART_PORT      UART_NUM_1 
+#define PMS_UART_PORT      UART_NUM_2 
 #define PMS_RX_PIN         16
 #define PMS_TX_PIN         17
 

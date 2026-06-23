@@ -3,10 +3,17 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/event_groups.h"
 #include "driver/i2c_master.h"
 #include "esp_lcd_io_i2c.h"
+#include "nvs_flash.h" 		
+#include "esp_wifi.h"       
+#include "esp_event.h"      // Thư viện quản lý sự kiện để check các event: mất mạng, kết nối, ...
+#include "esp_netif.h"		// Thư viện quản lý tầng mạng
+#include "esp_http_client.h"
 #include "driver/uart.h"
 #include "esp_err.h"
+#include "esp_crt_bundle.h"
 
 #include "bme280.h"
 #include "pms7003.h"
@@ -17,9 +24,68 @@
 #define I2C_MASTER_SCL_IO		 22
 #define I2C_MASTER_FREQ_HZ 		 100000 
 
+#define WIFI_SSID       		 "Manh"
+#define WIFI_PASSWORD   		 "15092003"
+static EventGroupHandle_t s_wifi_event_group;
+#define WIFI_CONNECTED_BIT 		( 1 << 0 )
 
+/*
+	event_handler (cách này do Gemini gợi ý)
+	
+static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
+if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+    esp_wifi_connect(); 
+        xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+    } 
+    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+}
+
+	Khi vào chương trình chính, check các cờ. Nếu mất mạng, bỏ qua bước gửi dữ liệu lên cloud
+	Nếu có mạng, gửi dữ liệu lên cloud
+	TODO: Thử theo cách này
+*/
+// fetch data (Gemini hd)
+void firebase_patch_data(double temp, double hum, uint16_t pm25) {
+	printf("bat dau firebase_patch_data \n");
+    char json_payload[128];
+    // 1. Đóng gói dữ liệu thành chuỗi định dạng JSON chuẩn
+    snprintf(json_payload, sizeof(json_payload), 
+             "{\"temperature\": %.2f, \"humidity\": %.1f, \"pm25\": %03u}", 
+             temp, hum, pm25);
+
+	const char *url = "embedded-finals-768a33-default-rtdb.asia-southeast1.firebasedatabase.app/.json?auth=ouFLCkulKxVRGfxxyDOzQk6LPar7BN1SsH5XGmx";
+    // Cấu hình HTTP Client
+    esp_http_client_config_t config_client = {
+        .url = url,
+        .method = HTTP_METHOD_PATCH, // Dùng lệnh PATCH để cập nhật dữ liệu
+        .timeout_ms = 5000,          // Quá 5 giây không phản hồi thì ngắt chống treo chip
+		.transport_type = HTTP_TRANSPORT_OVER_SSL,
+		.skip_cert_common_name_check = true,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config_client);
+
+    // 4. Cấu hình Header bắt buộc để Firebase hiểu đây là dữ liệu JSON
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, json_payload, strlen(json_payload));
+
+    // 5. Thực hiện gửi dữ liệu (Bắn lệnh HTTP)
+    esp_err_t err = esp_http_client_perform(client);
+
+    if (err == ESP_OK) {
+        int status_code = esp_http_client_get_status_code(client);
+        printf("Firebase: Gui thanh cong! HTTP Status Code = %d\n", status_code);
+    } else {
+        printf("Firebase: Gui that bai! Loi = %s\n", esp_err_to_name(err));
+    }
+
+    // 6. Luôn luôn giải phóng bộ nhớ sau khi dùng xong để tránh tràn RAM
+    esp_http_client_cleanup(client);
+}
 
 void app_main(void) {
+	printf("chip reseted!");
 	// config cho đường bus i2c
 	i2c_master_bus_config_t bus_config = {
 		.clk_source = I2C_CLK_SRC_DEFAULT,
@@ -56,89 +122,125 @@ void app_main(void) {
 	i2c_master_dev_handle_t lcd_handle;     
 	i2c_master_bus_add_device(bus_handle, &lcd_cfg, &lcd_handle);
 	
-
-	// config cho pms7003
-	esp_err_t pms7003_init(void) {
-		uart_config_t uart_config = {
-			.baud_rate = 9600,
-			.data_bits = UART_DATA_8_BITS,
-			.parity    = UART_PARITY_DISABLE,
-			.stop_bits = UART_STOP_BITS_1,
-			.flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-			.source_clk = UART_SCLK_DEFAULT,
-		};
-    
-    esp_err_t err = uart_param_config(PMS_UART_PORT, &uart_config);
-	if (err != ESP_OK) return err;
-    
-    err = uart_set_pin(PMS_UART_PORT, PMS_TX_PIN, PMS_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    if (err != ESP_OK) return err;
-	}	
-	uart_driver_install(PMS_UART_PORT, 256, 0, 0, NULL, 0);
-
+	//pms7003
+	uart_config_t uart_config = {
+		.baud_rate = 9600,
+		.data_bits = UART_DATA_8_BITS,
+		.parity    = UART_PARITY_DISABLE,
+		.stop_bits = UART_STOP_BITS_1,
+		.flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+		.source_clk = UART_SCLK_DEFAULT,
+	};
+	uart_param_config(PMS_UART_PORT, &uart_config);
+	uart_set_pin(PMS_UART_PORT, PMS_TX_PIN, PMS_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+		
 	
 	//khởi tạo
+	
+	// WiFi (code mẫu)
+	// 1. Khởi tạo phân vùng lưu trữ Flash để lưu cấu hình hệ thống
+	nvs_flash_init();
+	// 2. Khởi tạo tầng mạng mạng Netif
+	esp_netif_init();
+	// 3. Tạo một vòng lặp sự kiện mặc định (Default Event Loop) để bắt các sự kiện Kết nối/Mất mạng
+	esp_event_loop_create_default();
+	esp_netif_create_default_wifi_sta();
+	// 4. Khởi tạo cấu hình Wi-Fi với các thiết lập mặc định từ phần cứng
+	wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+	esp_wifi_init(&cfg);
+	// 5. Cấu hình SSID và Password bằng Struct trong C
+	wifi_config_t wifi_config = {
+		.sta = {
+			.ssid = WIFI_SSID,
+			.password = WIFI_PASSWORD,
+		},
+	};
+	// 6. Đặt chế độ và Kích hoạt Wi-Fi
+	esp_wifi_set_mode(WIFI_MODE_STA);
+	esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+	esp_wifi_start();
+	// 7. Ra lệnh kết nối
+	esp_wifi_connect();	
+	// event group: để theo dõi trạng thái kết nối wifi
+	s_wifi_event_group = xEventGroupCreate();
 	// lcd
 	lcd_init(lcd_handle);
+	vTaskDelay(pdMS_TO_TICKS(100));
 	
+	//pms7003
+	uart_driver_install(PMS_UART_PORT, 1024, 0, 0, NULL, 0);
 	//bme280
-	bme_init(bme_handle);
+	esp_err_t bme_err = bme_init(bme_handle);
+	if (bme_err != ESP_OK) 
+		printf("bme280 init failed!");
 	//biến đựng dữ liệu thô từ bme280
 	int32_t raw_T = 0;
     int32_t raw_H = 0;
 	
-	// In dòng trên ko thay đổi qua các loop
-	lcd_gotoxy(lcd_handle,0,0);
+	        		
 	const char lcd_header[17] = "Temp  Hum  PM";
-	lcd_put_str(lcd_handle, lcd_header);
+	lcd_put_str(lcd_handle, 0, 0, lcd_header);
+
+	double temp = 0;
+	double hum = 0;
+	uint16_t valid_pm25 = 0;
 	
-/* 
-//Nếu bắt đầu ghép LCD và chưa ghép 2 cái còn lại, thử code này
-while (1) {
-        // Giả sử bạn lấy được dữ liệu nhiệt độ từ cảm biến là 28.54
-        float temp = 28.54; 
-        char display_buffer[16];
-        snprintf(display_buffer, sizeof(display_buffer), "Temp: %.2f C", temp);
-
-        // Cập nhật dữ liệu động liên tục ở hàng 2
-        lcd_gotoxy(lcd_handle, 2, 1);   // Lùi vào 2 ô (Cột 2), Hàng 1 (Hàng 2)
-        lcd_put_str(lcd_handle, display_buffer);
-
-        vTaskDelay(pdMS_TO_TICKS(2000)); // Cập nhật lại sau 2 giây
-    }
-}
-// Giúp xác định xem lcd có hoạt động bth ko
-// Q: Sử dụng như nào?
-// A: Ở vòng lặp while(1) bên dưới, hãy đóng nó vào phần chú thích , sau đó gỡ dấu chú thích của cái này ra
-*/
 	while (1){
-		esp_err_t err_bme = bme280_read_raw(bme_handle, &raw_T, &raw_H);
-		double temp = 0;
-		double hum = 0;
-		if (err_bme == ESP_OK){
-			temp = bme_read_temp(bme_handle, raw_T);
-			hum = bme_read_hum(bme_handle, raw_H);
-			
-		}
-
-			
+	
 		
+		//i2c_scanner(bus_handle);
+		esp_err_t err_bme = bme280_read_raw(bme_handle, &raw_T, &raw_H);
+
+		
+		if (err_bme == ESP_OK){
+				temp = bme_read_temp(bme_handle, raw_T);
+				hum = bme_read_hum(bme_handle, raw_H);
+				printf("Temp %.1f Hum %.0f ", temp, hum);
+			}
+	
+				
 		uint16_t pm25 = read_pm25(PMS_UART_PORT);
 		if (pm25 == 0xFFFF){ 
 			//Nếu bị lỗi
-			pm25 = 0;
+			pm25 = valid_pm25; // trở lại dữ liệu gần nhất 
+		}
+		printf("PM2.5 %03u ", pm25);
+		
+		char lcd_buffer[64]; 
+		
+		snprintf(lcd_buffer, sizeof(lcd_buffer), "%.1f"  , temp); 
+		lcd_put_str(lcd_handle,0 ,1 , (const char *)lcd_buffer);
+		
+		snprintf(lcd_buffer, sizeof(lcd_buffer),"%.0f ", hum);
+		lcd_put_str(lcd_handle,6 ,1 , (const char *)lcd_buffer);
+		
+		snprintf(lcd_buffer, sizeof(lcd_buffer),"%03u", valid_pm25);
+		lcd_put_str(lcd_handle,11 ,1 , (const char *)lcd_buffer);
+
+		valid_pm25 = pm25; // cảm biến bụi mịn lấy mẫu rất chậm và thường lỗi đường truyền,
+							  //tạm thời hi sinh vài chu kỳ đầu để đợi giá trị valid.
+		
+
+		//Check trạng thái WiFi trước khi gửi
+		EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group, 
+                                       WIFI_CONNECTED_BIT, 
+                                       pdFALSE, 
+                                       pdTRUE, 
+                                       pdMS_TO_TICKS(5000));
+		if ((bits & WIFI_CONNECTED_BIT) == 0) {
+
+		printf("\n connect successfully");	
+		firebase_patch_data(temp, hum, pm25);
+
+		} else {
+
+		printf("\n failed to connect to wifi");
+        esp_wifi_connect(); 
+		vTaskDelay(pdMS_TO_TICKS(2000));
 		}
 		
-		lcd_gotoxy (lcd_handle,0,1);
-		
-		// Tạo 1 string chứa dữ liệu để in
-		char lcd_buffer[64]; 
-		snprintf(lcd_buffer, sizeof(lcd_buffer), "T:%.1f H:%.0f P:%03u", temp, hum, pm25); 
-		
-		lcd_put_str(lcd_handle, (const char *)lcd_buffer);
-		
 		vTaskDelay(pdMS_TO_TICKS(5000));
-}
+	}
 }
 
 

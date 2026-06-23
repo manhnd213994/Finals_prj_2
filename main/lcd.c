@@ -6,7 +6,7 @@
 #include "lcd.h"
 
 // gửi dữ liệu sang pcf8574
-static void lcd_send(i2c_master_dev_handle_t dev_handle, uint8_t value, uint8_t mode) {
+void lcd_send(i2c_master_dev_handle_t dev_handle, uint8_t value, uint8_t mode) {
     uint8_t high_nibble = value & 0xF0;
     uint8_t low_nibble = (value << 4) & 0xF0;
     uint8_t data[4];
@@ -23,12 +23,12 @@ static void lcd_send(i2c_master_dev_handle_t dev_handle, uint8_t value, uint8_t 
 }
 
 // Hàm gửi Lệnh (RS = 0)
-static void lcd_send_cmd(i2c_master_dev_handle_t dev_handle, uint8_t cmd) {
+void lcd_send_cmd(i2c_master_dev_handle_t dev_handle, uint8_t cmd) {
     lcd_send(dev_handle, cmd, 0);
 }
 
 // Hàm gửi Dữ liệu ký tự (RS = PIN_RS)
-static void lcd_send_data(i2c_master_dev_handle_t dev_handle, uint8_t data) {
+void lcd_send_data(i2c_master_dev_handle_t dev_handle, uint8_t data) {
     lcd_send(dev_handle, data, PIN_RS);
 }
 
@@ -51,17 +51,15 @@ esp_err_t lcd_init(i2c_master_dev_handle_t dev_handle) {
     return ESP_OK;
 }
 
-// đi đến vị trí cụ thể trên lcd
-void lcd_gotoxy(i2c_master_dev_handle_t dev_handle, uint8_t col, uint8_t row) {
-    uint8_t base_addr = (row == 0) ? LCD_LINE_1 : LCD_LINE_2;
-	
-    if (col > 15) col = 15;
 
-    lcd_send_cmd(dev_handle, base_addr + col);
-}
 
-//put
-void lcd_put_str(i2c_master_dev_handle_t dev_handle, const char *str) {
+
+//put ở vị trí cụ thể trên mh
+void lcd_put_str(i2c_master_dev_handle_t dev_handle,uint8_t col, uint8_t row, const char *str) {
+	uint8_t base_addr = (row == 0) ? LCD_LINE_1 : LCD_LINE_2;
+	if (row > 1)  row = 1;
+	if (col > 15) col = 15;
+	lcd_send_cmd(dev_handle, base_addr + col);
     while (*str) { //loop đến khi gặp "\0"
         lcd_send_data(dev_handle, (uint8_t)(*str));
         str++; 

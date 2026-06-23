@@ -77,11 +77,11 @@ double bme_read_hum(i2c_master_dev_handle_t bme_handle, int32_t adc_H) {
 	i2c_master_transmit_receive(bme_handle, &reg_h1_start, 1, buf_h1, 1, 500); 
 	i2c_master_transmit_receive(bme_handle, &reg_h2_start, 1, buf_h2, 7, 500);
 	uint8_t dig_H1 = buf_h1[0];
-	uint8_t dig_H2 = (int16_t)((buf_h2[1] << 8) | buf_h2[0]); 
-    uint16_t dig_H3 = buf_h2[2];                             
-	int16_t dig_H4 = (int16_t)((buf_h2[3] << 4) | (buf_h2[4] & 0x0F));
-	int16_t dig_H5 = (int16_t)((buf_h2[5] << 4) | (buf_h2[4] >> 4));
-    int8_t dig_H6 = (int8_t)buf_h2[6];
+    int16_t dig_H2 = (int16_t)((buf_h2[1] << 8) | buf_h2[0]);
+    uint8_t dig_H3 = buf_h2[2];
+    int16_t dig_H4 = (int16_t)(((int16_t)buf_h2[3] << 4) | (buf_h2[4] & 0x0F));
+    int16_t dig_H5 = (int16_t)(((int16_t)buf_h2[5] << 4) | ((buf_h2[4] >> 4) & 0x0F));
+    int8_t  dig_H6 = (int8_t)buf_h2[6];
 	
 	double var_H; 
 	var_H = (((double)t_fine) - 76800.0); 
