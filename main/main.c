@@ -1,58 +1,51 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "freertos/FreeRTOS.h"
+#include "freertos/FreeRTOS.h"			//Thư viện RTOS
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
-#include "driver/i2c_master.h"
-#include "esp_lcd_io_i2c.h"
+#include "driver/i2c_master.h"			//Chứa các hàm phục vụ giao tiếp I2C
+#include "esp_lcd_io_i2c.h"				//Chứa các hàm giao tiếp với LCD qua I2C
 #include "nvs_flash.h" 		
-#include "esp_wifi.h"       
+#include "esp_wifi.h"       // Thư viện chứa các hàm liên quan đến giao tiếp với WiFi
 #include "esp_event.h"      // Thư viện quản lý sự kiện để check các event: mất mạng, kết nối, ...
 #include "esp_netif.h"		// Thư viện quản lý tầng mạng
 #include "esp_http_client.h"
 #include "driver/uart.h"
 #include "esp_err.h"
 #include "esp_crt_bundle.h"
+#include <time.h>
+#include <sys/time.h>
+#include "esp_sntp.h"
 
-#include "bme280.h"
+#include "bme280.h"				// Thư viện tự tạo, chứa các hàm giao tiếp tự viết, marco để phục vụ project
 #include "pms7003.h"
 #include "lcd.h"
 
+// MACRO CHO KẾT NỐI I2C DO CHƯA KHAI BÁO TRONG CÁC THƯ VIỆN TRÊN
 #define I2C_MASTER_NUM           I2C_NUM_0    
 #define I2C_MASTER_SDA_IO 		 21
 #define I2C_MASTER_SCL_IO		 22
 #define I2C_MASTER_FREQ_HZ 		 100000 
 
+// MARCO CHO KẾT NỐI WIFI
 #define WIFI_SSID       		 "Manh"
 #define WIFI_PASSWORD   		 "15092003"
 static EventGroupHandle_t s_wifi_event_group;
 #define WIFI_CONNECTED_BIT 		( 1 << 0 )
 
-/*
-	event_handler (cách này do Gemini gợi ý)
-	
-static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
-if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-    esp_wifi_connect(); 
-        xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
-    } 
-    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
-}
 
-	Khi vào chương trình chính, check các cờ. Nếu mất mạng, bỏ qua bước gửi dữ liệu lên cloud
-	Nếu có mạng, gửi dữ liệu lên cloud
-	TODO: Thử theo cách này
-*/
-// fetch data (Gemini hd)
+// fetch data (Gemini fix)
 static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+		// Nếu wifi mất kết nối
         printf("[WIFI] Mat ket noi, dang thu ket noi lai...\n");
         esp_wifi_connect(); 
         xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+		//reset lại trạng thái cho cờ wifi_event
     } 
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+		// Nếu kết nối thành công và đc cấp phát IP thành công
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         printf("[WIFI] Da nhan duoc IP chuẩn: " IPSTR "\n", IP2STR(&event->ip_info.ip));
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
@@ -68,16 +61,16 @@ void firebase_patch_data(double temp, double hum, uint16_t pm25) {
 
 	const char *url = "https://embedded-finals-768a33-default-rtdb.asia-southeast1.firebasedatabase.app/sensor_data.json?auth=ouFLCkulKxVRGfxxyDOzQk6LPar7BN1SsH5XGmx";
     
-    // Cấu hình HTTP Client siêu tối giản (Tránh rác config)
+    // Cấu hình HTTP Client 
     esp_http_client_config_t config_client = {
         .url = url,
-        .method = HTTP_METHOD_PATCH, 
+        .method = HTTP_METHOD_POST, //Tạo node mới liên tục thay vì update lên node cũ 
         .timeout_ms = 5000,          
 		.transport_type = HTTP_TRANSPORT_OVER_SSL,
 		.skip_cert_common_name_check = true,
     };
-
     esp_http_client_handle_t client = esp_http_client_init(&config_client);
+	
     if (client == NULL) {
         printf("Firebase: Khoi tao client that bai\n");
         return;
@@ -240,16 +233,12 @@ void app_main(void) {
                                        pdFALSE, 
                                        pdTRUE, 
                                        pdMS_TO_TICKS(5000));
-		if ((bits & WIFI_CONNECTED_BIT) != 0) {
-
-		printf("\n connect successfully");	
-		firebase_patch_data(temp, hum, pm25);
-
-		} else {
-
-		printf("\n failed to connect to wifi");
-        esp_wifi_connect(); 
-		vTaskDelay(pdMS_TO_TICKS(2000));
+		if ((bits & WIFI_CONNECTED_BIT) != 0) { // Nếu có mạng (khác 0)
+			printf("\n[SYSTEM] Wifi connect successfully! Dang gui data...\n");	
+			firebase_patch_data(temp, hum, pm25);
+		} else {                                // Nếu mất mạng / Chưa có IP
+			printf("\n[SYSTEM] Failed to connect to wifi hoặc chưa nhận được IP thô!\n");
+			esp_wifi_connect(); 
 		}
 		
 		vTaskDelay(pdMS_TO_TICKS(5000));
