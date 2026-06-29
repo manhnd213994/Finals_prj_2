@@ -6,7 +6,8 @@
 #include "freertos/event_groups.h"
 #include "driver/i2c_master.h"			//Chứa các hàm phục vụ giao tiếp I2C
 #include "esp_lcd_io_i2c.h"				//Chứa các hàm giao tiếp với LCD qua I2C
-#include "nvs_flash.h" 		
+#include "nvs_flash.h" 					// Có vài hàm cần tương tác với bộ nhớ flash
+#include "nvs.h"		
 #include "esp_wifi.h"       // Thư viện chứa các hàm liên quan đến giao tiếp với WiFi
 #include "esp_event.h"      // Thư viện quản lý sự kiện để check các event: mất mạng, kết nối, ...
 #include "esp_netif.h"		// Thư viện quản lý tầng mạng
@@ -14,7 +15,7 @@
 #include "driver/uart.h"
 #include "esp_err.h"
 #include "esp_crt_bundle.h"
-#include <time.h>
+#include <time.h>			// Thời gian
 #include <sys/time.h>
 #include "esp_sntp.h"
 
@@ -33,8 +34,18 @@
 #define WIFI_PASSWORD   		 "15092003"
 static EventGroupHandle_t s_wifi_event_group;
 #define WIFI_CONNECTED_BIT 		( 1 << 0 )
+/*
+// setup sntp
+void init_sntp(void) {
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "time.google.com"); 
+    esp_sntp_init();
 
-
+    // Thiết lập múi giờ Việt Nam (GMT+7)
+    setenv("TZ", "WIB-7", 1);
+    tzset();
+}
+*/
 // fetch data (Gemini fix)
 static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
@@ -54,12 +65,25 @@ static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_
 
 void firebase_patch_data(double temp, double hum, uint16_t pm25) {
 	printf("bat dau firebase_patch_data \n");
-    char json_payload[128];
-    snprintf(json_payload, sizeof(json_payload), 
-             "{\"temperature\": %.2f, \"humidity\": %.1f, \"pm25\": %03u}", 
-             temp, hum, pm25);
+/*	
+	// lấy thời gian hiện tại 
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo); //gán thời gian hiện tại
 
-	const char *url = "https://embedded-finals-768a33-default-rtdb.asia-southeast1.firebasedatabase.app/sensor_data.json?auth=ouFLCkulKxVRGfxxyDOzQk6LPar7BN1SsH5XGmx";
+    // Định dạng thời gian thành chuỗi "YYYY-MM-DD HH:MM:SS"
+    char time_str[64];
+    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &timeinfo);
+*/	
+    char json_payload[256];
+    snprintf(json_payload, sizeof(json_payload), 
+             "{\"temperature\": %.2f, \"humidity\": %.1f, \"pm25\": %u }", 
+             temp, hum, pm25);
+	printf("\nPayload kiem tra: %s\n", json_payload);
+	fflush(stdout);
+	
+	const char *url = "https://env-monitor-f98bb-default-rtdb.firebaseio.com/.json?auth=u1siQpGDI5rUIsqJrMuqAqNz83oTEhut9HKconA2";
     
     // Cấu hình HTTP Client 
     esp_http_client_config_t config_client = {
@@ -72,7 +96,7 @@ void firebase_patch_data(double temp, double hum, uint16_t pm25) {
     esp_http_client_handle_t client = esp_http_client_init(&config_client);
 	
     if (client == NULL) {
-        printf("Firebase: Khoi tao client that bai\n");
+        printf("Firebase: Khoi tao client that bai \n");
         return;
     }
 
@@ -83,9 +107,9 @@ void firebase_patch_data(double temp, double hum, uint16_t pm25) {
 
     if (err == ESP_OK) {
         int status_code = esp_http_client_get_status_code(client);
-        printf("Firebase: Gui thanh cong! HTTP Status Code = %d\n", status_code);
+        printf("Firebase: Gui thanh cong! HTTP Status Code = %d \n", status_code);
     } else {
-        printf("Firebase: Gui that bai! Loi = %s\n", esp_err_to_name(err));
+        printf("Firebase: Gui that bai! Loi = %s \n", esp_err_to_name(err));
     }
 
     esp_http_client_cleanup(client);
@@ -166,6 +190,8 @@ void app_main(void) {
 	esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
 	esp_wifi_start();
 	esp_wifi_connect();
+//	init_sntp(); // lấy thời gian 
+
 	// event group: để theo dõi trạng thái kết nối wifi
 	s_wifi_event_group = xEventGroupCreate();
 	
@@ -178,7 +204,7 @@ void app_main(void) {
 	//bme280
 	esp_err_t bme_err = bme_init(bme_handle);
 	if (bme_err != ESP_OK) 
-		printf("bme280 init failed!");
+		printf("bme280 init failed! \n");
 	//biến đựng dữ liệu thô từ bme280
 	int32_t raw_T = 0;
     int32_t raw_H = 0;
@@ -201,7 +227,6 @@ void app_main(void) {
 		if (err_bme == ESP_OK){
 				temp = bme_read_temp(bme_handle, raw_T);
 				hum = bme_read_hum(bme_handle, raw_H);
-				printf("Temp %.1f Hum %.0f ", temp, hum);
 			}
 	
 				
@@ -210,7 +235,6 @@ void app_main(void) {
 			//Nếu bị lỗi
 			pm25 = valid_pm25; // trở lại dữ liệu gần nhất 
 		}
-		printf("PM2.5 %03u ", pm25);
 		
 		char lcd_buffer[64]; 
 		
@@ -234,14 +258,14 @@ void app_main(void) {
                                        pdTRUE, 
                                        pdMS_TO_TICKS(5000));
 		if ((bits & WIFI_CONNECTED_BIT) != 0) { // Nếu có mạng (khác 0)
-			printf("\n[SYSTEM] Wifi connect successfully! Dang gui data...\n");	
-			firebase_patch_data(temp, hum, pm25);
+			printf("\n [SYSTEM] Wifi connect successfully! Dang gui data... \n");	
+			firebase_patch_data(temp, hum, valid_pm25);
 		} else {                                // Nếu mất mạng / Chưa có IP
-			printf("\n[SYSTEM] Failed to connect to wifi hoặc chưa nhận được IP thô!\n");
+			printf("\n [SYSTEM] Failed to connect to wifi hoặc chưa nhận được IP thô! \n");
 			esp_wifi_connect(); 
 		}
 		
-		vTaskDelay(pdMS_TO_TICKS(5000));
+		vTaskDelay(pdMS_TO_TICKS(18000));
 	}
 }
 
