@@ -12,3 +12,5 @@ mesured data to an online database (specifically FireBase)
 
   I will include description of each function when I have time, 
 for now, please refer to the source code file for further explanation.
+
+29/06/26: fixed the communication error to firebase cloud db due to wrong type of data for pm2.5 value
